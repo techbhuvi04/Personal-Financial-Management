@@ -1,0 +1,12 @@
+# Local development against a PostgreSQL instance on localhost over plain HTTP.
+# Activate with: SPRING_PROFILES_ACTIVE=local (datasource settings come from application.yml / DB_* variables)
+server:
+  servlet:
+    session:
+      cookie:
+        # Secure cookies are not sent over plain http://localhost; production keeps them Secure.
+        secure: ${COOKIE_SECURE:false}
+
+logging:
+  level:
+    com.example.finance: DEBUG

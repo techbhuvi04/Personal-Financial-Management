@@ -1,0 +1,39 @@
+# Render Blueprint: one Docker web service plus a managed PostgreSQL database.
+# Deploy via Render Dashboard -> New -> Blueprint, pointing at this repository.
+services:
+  - type: web
+    name: personal-finance-manager
+    runtime: docker
+    plan: free
+    healthCheckPath: /actuator/health
+    envVars:
+      - key: DB_HOST
+        fromDatabase:
+          name: personal-finance-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: personal-finance-db
+          property: port
+      - key: DB_NAME
+        fromDatabase:
+          name: personal-finance-db
+          property: database
+      - key: DB_USERNAME
+        fromDatabase:
+          name: personal-finance-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: personal-finance-db
+          property: password
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: APP_TIME_ZONE
+        value: UTC
+      - key: JAVA_OPTS
+        value: "-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"
+
+databases:
+  - name: personal-finance-db
+    plan: free

@@ -1,0 +1,23 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:finance-test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+    hikari:
+      maximum-pool-size: 10
+
+server:
+  servlet:
+    session:
+      cookie:
+        secure: false
+
+app:
+  time-zone: UTC
+  security:
+    csrf-enabled: false
+
+logging:
+  level:
+    root: WARN
+    com.example.finance: INFO

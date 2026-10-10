@@ -1,0 +1,13 @@
+# Zero-setup profile: in-memory H2 in PostgreSQL compatibility mode, same Flyway migrations.
+# Data is lost on restart. Activate with: SPRING_PROFILES_ACTIVE=h2
+spring:
+  datasource:
+    url: jdbc:h2:mem:finance;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+
+server:
+  servlet:
+    session:
+      cookie:
+        secure: ${COOKIE_SECURE:false}
