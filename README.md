@@ -2,8 +2,17 @@
 
 A session-authenticated REST API for tracking income and expenses, organising them into categories, monitoring savings goals and producing monthly and yearly reports. It is a single Spring Boot service backed by PostgreSQL, with every user's data isolated from every other user's.
 
+**Quick start** (Java 17; no database needed):
+
+```bash
+SPRING_PROFILES_ACTIVE=h2 ./mvnw spring-boot:run          # API on http://localhost:8080/api
+./mvnw verify                                              # 276 tests + 80% coverage gate
+bash financial_manager_tests.sh http://localhost:8080/api  # grading script from the assignment PDF: 86/86
+```
+
 - [Technology stack](#technology-stack)
 - [Architecture](#architecture)
+- [Design principles](#design-principles)
 - [Getting started](#getting-started)
 - [Configuration](#configuration)
 - [Testing and coverage](#testing-and-coverage)
@@ -14,6 +23,8 @@ A session-authenticated REST API for tracking income and expenses, organising th
 - [Business rules](#business-rules)
 - [Database schema](#database-schema)
 - [Design decisions and assumptions](#design-decisions-and-assumptions)
+- [Trade-offs](#trade-offs)
+- [Verification and fixes](#verification-and-fixes)
 - [Deployment](#deployment)
 - [Known limitations](#known-limitations)
 
@@ -60,23 +71,36 @@ src/main/resources
 └── db/migration/V1..V4 (users, categories + default seed, transactions, savings_goals)
 ```
 
-How each layer is kept to its job:
+A request flows through the layers like this:
 
-- **Single responsibility:**
-  - Controllers only translate HTTP.
-  - Services own the business rules and transaction boundaries.
-  - Repositories own queries.
-  - Mappers own conversion.
-  - `SessionAuthenticationHandler` owns session mechanics.
-  - `SecurityErrorHandler` owns errors raised inside the security filter chain.
-- **Open/closed:**
-  - Transaction filters are composable JPA `Specification` predicates, so a new filter is one more predicate rather than another query method.
-  - Reports share one aggregation routine that is parameterised by date range.
-- **Dependency inversion:**
-  - Time comes from an injected `java.time.Clock`.
-  - Password hashing and authentication go through the `PasswordEncoder` and `AuthenticationManager` abstractions.
-  - All collaborators are constructor-injected and stored in final fields.
-- **Interfaces only where useful:** services are concrete classes, because a second implementation isn't foreseeable. Mockito mocks the collaborators directly.
+1. **Security filter chain:** checks the session cookie. Anonymous requests to business endpoints are rejected here with a JSON 401 (`SecurityErrorHandler`).
+2. **Controller:** binds and validates the JSON DTO, takes the user id from the session principal, and calls one service method.
+3. **Service:** applies the business rules inside `@Transactional` and works only on the caller's own data.
+4. **Repository:** runs owner-scoped queries; aggregation happens in SQL.
+5. **Mapper → DTO → JSON:** entities never leave the service layer.
+6. **Errors:** any exception becomes the same `ErrorResponse` JSON (`GlobalExceptionHandler`).
+
+## Design principles
+
+### SOLID
+
+| Principle | How it is applied | Where |
+| --- | --- | --- |
+| **Single responsibility** | Controllers only translate HTTP. Services own business rules and transaction boundaries, repositories own queries, mappers own entity → DTO conversion. Session mechanics and security-layer errors each have their own class. Goal progress is calculated in exactly one place. | `controller/*`, `service/*`, `mapper/*`, `SessionAuthenticationHandler`, `SecurityErrorHandler`, `GoalProgressCalculator` |
+| **Open/closed** | Each transaction filter is an independent `Specification` predicate, so a new filter is one more predicate with no new query method. Monthly and yearly reports share one aggregation routine parameterised by date range, so a new period (e.g. quarterly) only computes its range. | `TransactionSpecifications`, `ReportService.aggregate` |
+| **Liskov substitution** | Inheritance is used only where the subtype keeps the parent's contract: domain exceptions extend `RuntimeException`, and `CustomUserDetails` is a drop-in `UserDetails`. There are no entity class hierarchies to break substitution. | `exception/*`, `CustomUserDetails` |
+| **Interface segregation** | No broad "service interfaces". Classes depend on narrow framework interfaces: `UserDetailsService`, `AuthenticationEntryPoint`, `AccessDeniedHandler`, `PasswordEncoder`. Repositories expose only the queries their callers use. | `security/*`, `repository/*` |
+| **Dependency inversion** | Business code depends on abstractions it receives, never on concrete infrastructure it builds: `Clock` for "today", `PasswordEncoder`, `AuthenticationManager`, `SecurityContextRepository`. Everything is constructor-injected into `final` fields, which is also what makes the Mockito unit tests possible. | `TimeConfig`, `AuthService`, `TransactionService`, `GoalService` |
+
+### Other principles
+
+- **Fail fast:** bad input is rejected at the boundary with 400. Bean Validation runs on the DTOs, service checks cover what needs data or the clock, and the database never sees invalid values.
+- **The database is the final authority:** uniqueness, positive amounts, ownership consistency and "category in use" are enforced by constraints in the Flyway migrations. Service checks only make the error messages friendly; races that slip past them are still stopped by the database and mapped to 409/400.
+- **Secure by default:** every endpoint except register, login, the CSRF bootstrap, health and docs needs a session. Cookies are HttpOnly, SameSite=Strict and Secure in production. Passwords are BCrypt-hashed and never logged, and no CORS is published.
+- **No mass assignment:** requests bind to dedicated records that never include an owner or id, so the owner always comes from the session.
+- **DRY without over-generalising:** shared rules live in one place each. `MonetaryAmounts` holds the money scale and rounding, `SupportedDateRange` the date bounds, `InputNormalizer` input canonicalisation.
+- **KISS / YAGNI:** one deployable monolith with no caches, brokers or speculative abstractions. Services are concrete classes because no second implementation is foreseeable.
+- **Exact money:** `BigDecimal` and `NUMERIC(15,2)` throughout; floating point is used only to print percentages.
 
 ## Getting started
 
@@ -485,6 +509,51 @@ These are the points where the assignment was ambiguous or silent, and the choic
    - An update or delete that loses a race against another delete returns 409 (`ConcurrencyFailureException`) instead of 500.
    - Writing a transaction takes a shared row lock on its **custom** category, and deleting a category takes an exclusive lock. This keeps "no transaction references a deleted category" true even on databases whose foreign-key checks don't lock the parent row (H2 does not; PostgreSQL does). Default categories are never deleted, so they are not locked.
 12. **Monolith:** this is a single service. There are no message brokers, caches or service interfaces without a second implementation.
+
+## Trade-offs
+
+| Decision | What it gains | What it costs |
+| --- | --- | --- |
+| Server-side `HttpSession` instead of JWT (required by the assignment) | Logout really revokes access; no token handling in clients | Stateful: sessions are in memory, so a restart logs users out and multiple instances need sticky sessions or a shared session store |
+| Token CSRF off by default (`CSRF_ENABLED=false`) | curl and the grading script work without fetching a token | Browser front ends should turn it on. SameSite=Strict cookies, no CORS and JSON-only bodies still apply when it's off |
+| Goal progress computed on every read, never stored | Can never go stale: edits and deletes show up immediately | One aggregate query per goal (1 + N for the goal list) |
+| Transaction type derived from the category, not stored | Type and category can never disagree | Filtering by type needs a join to `categories` |
+| Hard delete of transactions | Simple; deleted rows drop out of reports and goals automatically | No undo or audit trail |
+| Totals summed in SQL (`GROUP BY`) | Constant memory regardless of history size | Aggregation logic lives in JPQL |
+| Flyway migrations + Hibernate `validate` | Reproducible schema; entities can't drift from it | Migrations are written by hand in a SQL subset that runs on both PostgreSQL and H2 (e.g. a `normalized_name` column instead of an expression index) |
+| H2 in tests instead of PostgreSQL containers | Fast, needs no Docker or database | H2 behaves differently under concurrency, so PostgreSQL behaviour was also verified by running the app and scripts against real PostgreSQL |
+| Row lock on **custom** categories while a transaction is written or a category deleted | "No transaction references a deleted category" holds on every database | Concurrent writes using the *same* custom category briefly queue (only within one user). Default categories are never locked |
+| Ignore `date` on transaction updates instead of rejecting it | Matches the grading script (2xx with the original date) | A client that tries to change the date gets no error; the response shows the unchanged date |
+| Zero printed as `0`, percentages as plain numbers (`65.5`) | Matches the grading script's text comparisons and the assignment examples | Zero is formatted differently from non-zero amounts (`6550.00`) |
+| 404 for another user's transaction, 403 for another user's goal | Follows each endpoint's documented status list; 404 also hides whether a transaction id exists | The two resources answer the same situation differently |
+| No pagination on the transaction list | Matches the `{"transactions":[...]}` contract | Very large histories return in one response |
+| Concrete service classes, no interfaces | Less boilerplate; Mockito mocks concrete collaborators fine | Adding a second implementation later means extracting an interface |
+
+## Verification and fixes
+
+Measured on the current code:
+
+| Check | Result |
+| --- | --- |
+| `./mvnw clean verify` | BUILD SUCCESS: **276 tests, 0 failures, 0 skipped** |
+| JaCoCo coverage | **98.3% line**, **90.6% branch** (gate: 80% line) |
+| Assignment `financial_manager_tests.sh`, local PostgreSQL | **86/86** (exit 0); also 86/86 after a restart and on the `h2` profile |
+| Project smoke script | 68/68 |
+| Deployed instance | Run the grading script against the deployed URL and record the result there |
+
+An audit replayed the assignment's grading script and probed edge cases. The first version passed its own tests but only **51/86** of the grading script; these defects were then reproduced with failing tests and fixed:
+
+| # | Problem found | Fix | Regression tests |
+| --- | --- | --- | --- |
+| 1 | Phone `+0987654321` (used by the grader) was rejected, so the second user could not register | Leading zero allowed | `AssignmentContractIntegrationTest` |
+| 2 | `PUT /transactions/{id}` with a `date` returned 400; the grader expects 2xx with the date unchanged | `date` is read-only and ignored; empty updates are no-ops | `AssignmentContractIntegrationTest`, `TransactionIntegrationTest` |
+| 3 | Category responses lacked the `custom` field the grader reads | Flag output as both `custom` and `isCustom` | `AssignmentContractIntegrationTest` |
+| 4 | Number formats differed from the grader's text checks (`65.50` vs `65.5`, `0.00` vs `0`) | Percentages as plain numbers, zero as `0` | `AssignmentContractIntegrationTest`, `FinancialCalculationIntegrationTest` |
+| 5 | **Security:** BCrypt only uses the first 72 bytes, so a different password sharing that prefix could log in (CVE-2025-22228 in the old Spring Security) | 72-byte limit at registration, a check before login, and an upgrade to Spring Boot 3.5.16 | `InputBoundaryIntegrationTest` |
+| 6 | An update or delete racing a delete returned 500 | Concurrent-modification conflicts return 409 | `ConcurrentModificationIntegrationTest` |
+| 7 | Dates like year 1 or BC were accepted but could never be reported; extreme dates gave 409 | All business dates must be within 1900-01-01..9999-12-31 (400 otherwise) | `InputBoundaryIntegrationTest` |
+| 8 | On H2, a category could be deleted while a transaction using it was being created (PostgreSQL was already safe) | Row locks on custom categories during both operations | `ConcurrentModificationIntegrationTest` |
+| 9 | Report category order depended on the database's collation | Sorted case-insensitively in the application | `FinancialCalculationIntegrationTest` |
 
 ## Deployment
 
