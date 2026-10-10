@@ -53,8 +53,8 @@ class ReportIntegrationTest extends IntegrationTestBase {
         getAs(session, "/api/reports/monthly/2024/3")
                 .andExpect(status().isOk())
                 .andExpect(content().json("""
-                        {"month":3,"year":2024,"totalIncome":{},"totalExpenses":{},"netSavings":0.00}""", true))
-                .andExpect(content().string(containsString("\"netSavings\":0.00")));
+                        {"month":3,"year":2024,"totalIncome":{},"totalExpenses":{},"netSavings":0}""", true))
+                .andExpect(content().string(containsString("\"netSavings\":0}")));
     }
 
     @Test

@@ -70,13 +70,14 @@ class AuthIntegrationTest extends IntegrationTestBase {
                 Arguments.of("password", "short1", "Password must be between 8 and 72 characters"),
                 Arguments.of("password", "allletters", "Password must contain at least one letter and one digit"),
                 Arguments.of("password", "12345678", "Password must contain at least one letter and one digit"),
-                Arguments.of("password", "a1".repeat(37), "Password must be between 8 and 72 characters"),
+                Arguments.of("password", "a1".repeat(37), "Password must be at most 72 bytes"),
                 Arguments.of("fullName", "   ", "Full name is required"),
                 Arguments.of("fullName", "R2D2", "Full name may only contain"),
                 Arguments.of("fullName", "a".repeat(101), "Full name must be at most 100 characters"),
                 Arguments.of("phoneNumber", null, "Phone number is required"),
                 Arguments.of("phoneNumber", "12ab", "Phone number must contain 7 to 15 digits"),
-                Arguments.of("phoneNumber", "+0123456", "Phone number must contain 7 to 15 digits"),
+                Arguments.of("phoneNumber", "+123456", "Phone number must contain 7 to 15 digits"),
+                Arguments.of("phoneNumber", "++1234567", "Phone number must contain 7 to 15 digits"),
                 Arguments.of("phoneNumber", "1234567890123456", "Phone number must contain 7 to 15 digits"));
     }
 

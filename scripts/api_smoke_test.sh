@@ -63,7 +63,7 @@ request "$A" POST /auth/register '{"username":"not-an-email","password":"passwor
 expect "invalid email" 400
 request "$A" POST /auth/register "{\"username\":\"weak.$RUN_ID@example.com\",\"password\":\"short\",\"fullName\":\"X\",\"phoneNumber\":\"+1234567890\"}"
 expect "weak password" 400
-request "$B" POST /auth/register "{\"username\":\"$USER_B\",\"password\":\"password123\",\"fullName\":\"Bob Doe\",\"phoneNumber\":\"+1987654321\"}"
+request "$B" POST /auth/register "{\"username\":\"$USER_B\",\"password\":\"password123\",\"fullName\":\"Bob Doe\",\"phoneNumber\":\"+0987654321\"}"
 expect "register user B" 201
 request "$ANON" GET /transactions
 expect "unauthenticated access" 401
@@ -127,7 +127,8 @@ request "$A" PUT "/transactions/$TX_ID" '{"amount":6000.00,"description":"Update
 expect "update transaction" 200
 expect_body "amount updated" '"amount":6000.00'
 request "$A" PUT "/transactions/$TX_ID" '{"date":"2020-01-01"}'
-expect "update transaction date rejected" 400
+expect "update with date field (date is read-only)" 200
+expect_body "date unchanged" "\"date\":\"$TODAY\""
 request "$B" PUT "/transactions/$TX_ID" '{"amount":1}'
 expect "user B cannot update A's transaction" 404
 request "$B" DELETE "/transactions/$TX_ID"
@@ -160,7 +161,7 @@ request "$B" GET "/goals/$GOAL_ID"
 expect "user B cannot read A's goal" 403
 request "$A" PUT "/goals/$GOAL_ID" "{\"targetAmount\":10000.00,\"targetDate\":\"$NEXT_YEAR\"}"
 expect "update goal" 200
-expect_body "percentage recomputed" '"progressPercentage":51.00'
+expect_body "percentage recomputed" '"progressPercentage":51.0,'
 request "$A" GET /goals/abc
 expect "non-numeric goal id" 400
 request "$A" GET /goals/999999999
@@ -176,7 +177,7 @@ request "$A" GET "/reports/monthly/$YEAR/13"
 expect "invalid month" 400
 request "$B" GET "/reports/yearly/$YEAR"
 expect "user B report excludes A's data" 200
-expect_body "user B has zero net savings" '"netSavings":0.00'
+expect_body "user B has zero net savings" '"netSavings":0}'
 
 echo "== Deletion effects"
 request "$A" DELETE "/transactions/$TX_ID"

@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Sort;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -42,6 +43,8 @@ class RepositoryIntegrationTest {
     private SavingsGoalRepository goalRepository;
     @Autowired
     private JdbcTemplate jdbcTemplate;
+    @Autowired
+    private TestEntityManager entityManager;
 
     private User alice;
     private User bob;
@@ -100,13 +103,17 @@ class RepositoryIntegrationTest {
     }
 
     @Test
-    void referencedCategoryCannotBeDeleted() {
+    void databaseForeignKeyPreventsDeletingAReferencedCategory() {
         Category gifts = categoryRepository.saveAndFlush(Category.custom("Gifts", TransactionType.EXPENSE, alice));
         transactionRepository.saveAndFlush(new Transaction(alice, gifts, BigDecimal.TEN, LocalDate.of(2024, 1, 1), null));
-
         assertThat(transactionRepository.existsByCategoryId(gifts.getId())).isTrue();
+        // Detach everything so Hibernate cannot see the referencing row in memory: this models a transaction
+        // committed by a concurrent request, where only the database foreign key can stop the delete.
+        entityManager.clear();
+        Category detachedView = categoryRepository.findById(gifts.getId()).orElseThrow();
+
         assertThatThrownBy(() -> {
-            categoryRepository.delete(gifts);
+            categoryRepository.delete(detachedView);
             categoryRepository.flush();
         }).isInstanceOf(DataIntegrityViolationException.class);
     }

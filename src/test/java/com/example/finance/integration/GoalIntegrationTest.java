@@ -55,7 +55,7 @@ class GoalIntegrationTest extends IntegrationTestBase {
                 .andExpect(jsonPath("$.startDate").value("2026-01-01"))
                 .andExpect(content().string(containsString("\"targetAmount\":5000.00")))
                 .andExpect(content().string(containsString("\"currentProgress\":1000.00")))
-                .andExpect(content().string(containsString("\"progressPercentage\":20.00")))
+                .andExpect(content().string(containsString("\"progressPercentage\":20.0,")))
                 .andExpect(content().string(containsString("\"remainingAmount\":4000.00")));
     }
 
@@ -68,7 +68,7 @@ class GoalIntegrationTest extends IntegrationTestBase {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.startDate").value("2026-10-10"))
                 .andExpect(content().string(containsString("\"currentProgress\":40.00")))
-                .andExpect(content().string(containsString("\"progressPercentage\":10.00")));
+                .andExpect(content().string(containsString("\"progressPercentage\":10.0,")));
     }
 
     @ParameterizedTest(name = "{0}={1}")
@@ -131,7 +131,7 @@ class GoalIntegrationTest extends IntegrationTestBase {
         getAs(session, "/api/goals/" + id)
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("\"currentProgress\":-250.00")))
-                .andExpect(content().string(containsString("\"progressPercentage\":-25.00")))
+                .andExpect(content().string(containsString("\"progressPercentage\":-25.0,")))
                 .andExpect(content().string(containsString("\"remainingAmount\":1250.00")));
     }
 
@@ -179,10 +179,21 @@ class GoalIntegrationTest extends IntegrationTestBase {
     }
 
     @Test
+    void updateWithNothingToChangeOrOnlyReadOnlyFieldsIsANoOp() throws Exception {
+        long id = createGoal(session, "5000", "2027-01-01", null);
+
+        putJson(session, "/api/goals/" + id, Map.of()).andExpect(status().isOk());
+        putJson(session, "/api/goals/" + id, Map.of("startDate", "2020-01-01", "goalName", "Renamed"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.startDate").value("2026-10-10"))
+                .andExpect(jsonPath("$.goalName").value("Emergency Fund"))
+                .andExpect(jsonPath("$.targetAmount").value(5000.0));
+    }
+
+    @Test
     void invalidUpdatesReturn400AndChangeNothing() throws Exception {
         long id = createGoal(session, "5000", "2027-01-01", null);
 
-        putJson(session, "/api/goals/" + id, Map.of()).andExpect(status().isBadRequest());
         putJson(session, "/api/goals/" + id, Map.of("targetAmount", 10, "targetDate", "2026-10-10"))
                 .andExpect(status().isBadRequest());
         putJson(session, "/api/goals/" + id, Map.of("targetAmount", -10)).andExpect(status().isBadRequest());

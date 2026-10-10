@@ -7,9 +7,12 @@ import com.example.finance.exception.BusinessRuleViolationException;
 import com.example.finance.repository.TransactionRepository;
 import com.example.finance.repository.projection.CategoryTotal;
 import com.example.finance.util.MonetaryAmounts;
+import com.example.finance.util.SupportedDateRange;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,8 +23,13 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class ReportService {
 
-    static final int MIN_YEAR = 1900;
-    static final int MAX_YEAR = 9999;
+    static final int MIN_YEAR = SupportedDateRange.MIN.getYear();
+    static final int MAX_YEAR = SupportedDateRange.MAX.getYear();
+
+    /** Case-insensitive alphabetical order, independent of the database collation. */
+    private static final Comparator<CategoryTotal> BY_NAME = Comparator
+            .comparing(CategoryTotal::categoryName, String.CASE_INSENSITIVE_ORDER)
+            .thenComparing(CategoryTotal::categoryName);
 
     private final TransactionRepository transactionRepository;
 
@@ -34,7 +42,7 @@ public class ReportService {
 
     /**
      * @param userId current user
-     * @param year   calendar year ({@value #MIN_YEAR}-{@value #MAX_YEAR})
+     * @param year   calendar year (1900-9999)
      * @param month  1-12
      * @return totals for {@code [first day of month, first day of next month)}
      */
@@ -51,7 +59,7 @@ public class ReportService {
 
     /**
      * @param userId current user
-     * @param year   calendar year ({@value #MIN_YEAR}-{@value #MAX_YEAR})
+     * @param year   calendar year (1900-9999)
      * @return totals for {@code [January 1, January 1 of next year)}
      */
     @Transactional(readOnly = true)
@@ -66,7 +74,10 @@ public class ReportService {
         Map<String, BigDecimal> income = new LinkedHashMap<>();
         Map<String, BigDecimal> expenses = new LinkedHashMap<>();
         BigDecimal net = MonetaryAmounts.ZERO;
-        for (CategoryTotal row : transactionRepository.sumByCategory(userId, fromInclusive, toExclusive)) {
+        List<CategoryTotal> rows = transactionRepository.sumByCategory(userId, fromInclusive, toExclusive).stream()
+                .sorted(BY_NAME)
+                .toList();
+        for (CategoryTotal row : rows) {
             BigDecimal amount = MonetaryAmounts.normalize(row.total());
             if (row.type() == TransactionType.INCOME) {
                 income.merge(row.categoryName(), amount, BigDecimal::add);

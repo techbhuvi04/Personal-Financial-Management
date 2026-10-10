@@ -87,6 +87,15 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    void concurrentModificationBecomes409() {
+        ResponseEntity<ErrorResponse> response = handler.handleConcurrentModification(
+                new org.springframework.orm.ObjectOptimisticLockingFailureException(Object.class, 1L), request);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody().message()).contains("modified or deleted by another request");
+    }
+
+    @Test
     void errorResponseOmitsEmptyFieldErrors() {
         ErrorResponse response = ErrorResponse.of(HttpStatus.NOT_FOUND, "missing", "/x");
 

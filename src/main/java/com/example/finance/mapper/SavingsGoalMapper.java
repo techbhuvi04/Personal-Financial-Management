@@ -25,7 +25,8 @@ public class SavingsGoalMapper {
                 goal.getTargetDate(),
                 goal.getStartDate(),
                 progress.currentProgress(),
-                progress.progressPercentage(),
+                // Computed exactly in BigDecimal; converted only for presentation.
+                progress.progressPercentage().doubleValue(),
                 progress.remainingAmount());
     }
 }

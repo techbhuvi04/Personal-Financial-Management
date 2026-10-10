@@ -15,8 +15,8 @@ final class ValidationPatterns {
     /** Unicode letters plus common name punctuation; must start with a letter. */
     static final String FULL_NAME = "^\\p{L}[\\p{L} .'-]*$";
 
-    /** E.164-style: optional '+', then 7-15 digits not starting with 0. */
-    static final String PHONE = "^\\+?[1-9]\\d{6,14}$";
+    /** Optional '+', then 7-15 digits. Leading zeros are allowed (e.g. "+0987654321" in the assignment's tests). */
+    static final String PHONE = "^\\+?\\d{7,15}$";
 
     private ValidationPatterns() {
     }

@@ -12,6 +12,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -85,7 +86,7 @@ public class GlobalExceptionHandler {
     ResponseEntity<ErrorResponse> handleParameterValidation(HandlerMethodValidationException ex,
                                                             HttpServletRequest request) {
         Map<String, String> fieldErrors = new LinkedHashMap<>();
-        ex.getAllValidationResults().forEach(result -> result.getResolvableErrors().forEach(error ->
+        ex.getParameterValidationResults().forEach(result -> result.getResolvableErrors().forEach(error ->
                 fieldErrors.putIfAbsent(result.getMethodParameter().getParameterName(), error.getDefaultMessage())));
         String message = fieldErrors.isEmpty() ? "Validation failed" : String.join("; ", fieldErrors.values());
         return build(HttpStatus.BAD_REQUEST, message, request, fieldErrors);
@@ -165,6 +166,19 @@ public class GlobalExceptionHandler {
         log.warn("Data integrity violation on {} {}: {}", request.getMethod(), request.getRequestURI(),
                 ex.getMostSpecificCause().getMessage());
         return build(HttpStatus.CONFLICT, "The request conflicts with the current state of the data", request);
+    }
+
+    /**
+     * Another request modified or deleted the same row first (e.g. an update racing a delete, where the UPDATE
+     * affects zero rows), or a row lock could not be obtained. The client should reload and retry.
+     */
+    @ExceptionHandler(ConcurrencyFailureException.class)
+    ResponseEntity<ErrorResponse> handleConcurrentModification(ConcurrencyFailureException ex,
+                                                               HttpServletRequest request) {
+        log.warn("Concurrent modification on {} {}: {}", request.getMethod(), request.getRequestURI(),
+                ex.getMessage());
+        return build(HttpStatus.CONFLICT,
+                "The resource was modified or deleted by another request; reload it and try again", request);
     }
 
     /**

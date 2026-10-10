@@ -59,7 +59,7 @@ class ReportServiceTest {
 
         assertThat(report.totalIncome()).isEmpty();
         assertThat(report.totalExpenses()).isEmpty();
-        assertThat(report.netSavings()).hasToString("0.00");
+        assertThat(report.netSavings()).hasToString("0");
     }
 
     @Test

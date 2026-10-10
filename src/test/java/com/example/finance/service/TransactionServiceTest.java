@@ -136,11 +136,39 @@ class TransactionServiceTest {
     }
 
     @Test
-    void updateRequiresAtLeastOneUpdatableField() {
-        assertThatThrownBy(() -> service.update(USER_ID, 5L,
-                new UpdateTransactionRequest(null, null, null, TODAY, TransactionType.EXPENSE)))
-                .isInstanceOf(BusinessRuleViolationException.class);
+    void listRejectsDatesOutsideSupportedRange() {
+        assertThatThrownBy(() -> service.list(USER_ID,
+                new TransactionFilter(LocalDate.of(1899, 12, 31), null, null, null, null)))
+                .isInstanceOf(BusinessRuleViolationException.class)
+                .hasMessage("startDate must be between 1900-01-01 and 9999-12-31");
+        assertThatThrownBy(() -> service.list(USER_ID, new TransactionFilter(null, LocalDate.MAX, null, null, null)))
+                .isInstanceOf(BusinessRuleViolationException.class)
+                .hasMessageStartingWith("endDate");
         verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void createRejectsDatesBefore1900() {
+        assertThatThrownBy(() -> service.create(USER_ID,
+                new CreateTransactionRequest(BigDecimal.ONE, LocalDate.of(1899, 12, 31), "Food", null, null)))
+                .isInstanceOf(BusinessRuleViolationException.class)
+                .hasMessage("Transaction date must be on or after 1900-01-01");
+        verifyNoInteractions(categoryService);
+    }
+
+    @Test
+    void updateWithNothingToChangeReturnsCurrentStateUnchanged() {
+        Transaction existing = transaction(5, owner, food, "10", TODAY);
+        when(transactionRepository.findOwnedById(5L, USER_ID)).thenReturn(Optional.of(existing));
+        when(transactionRepository.saveAndFlush(existing)).thenReturn(existing);
+
+        TransactionResponse response = service.update(USER_ID, 5L,
+                new UpdateTransactionRequest(null, null, null, null));
+
+        assertThat(response.amount()).hasToString("10.00");
+        assertThat(response.category()).isEqualTo("Food");
+        assertThat(response.date()).isEqualTo(TODAY);
+        verifyNoInteractions(categoryService);
     }
 
     @Test
@@ -148,19 +176,19 @@ class TransactionServiceTest {
         when(transactionRepository.findOwnedById(5L, USER_ID)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.update(USER_ID, 5L,
-                new UpdateTransactionRequest(BigDecimal.ONE, null, null, null, null)))
+                new UpdateTransactionRequest(BigDecimal.ONE, null, null, null)))
                 .isInstanceOf(ResourceNotFoundException.class);
     }
 
     @Test
-    void updateRejectsChangedDate() {
+    void updateRejectsTypeConflictingWithExistingCategory() {
         when(transactionRepository.findOwnedById(5L, USER_ID))
                 .thenReturn(Optional.of(transaction(5, owner, food, "10", TODAY)));
 
         assertThatThrownBy(() -> service.update(USER_ID, 5L,
-                new UpdateTransactionRequest(BigDecimal.ONE, null, null, TODAY.minusDays(1), null)))
-                .isInstanceOf(BusinessRuleViolationException.class)
-                .hasMessage("Transaction date cannot be changed");
+                new UpdateTransactionRequest(BigDecimal.ONE, null, null, TransactionType.INCOME)))
+                .isInstanceOf(BusinessRuleViolationException.class);
+        verify(transactionRepository, never()).saveAndFlush(any());
     }
 
     @Test
@@ -172,12 +200,13 @@ class TransactionServiceTest {
         when(transactionRepository.saveAndFlush(existing)).thenReturn(existing);
 
         TransactionResponse response = service.update(USER_ID, 5L,
-                new UpdateTransactionRequest(new BigDecimal("12.5"), "Salary", "  ", TODAY, TransactionType.INCOME));
+                new UpdateTransactionRequest(new BigDecimal("12.5"), "Salary", "  ", TransactionType.INCOME));
 
         assertThat(response.amount()).hasToString("12.50");
         assertThat(response.category()).isEqualTo("Salary");
         assertThat(response.type()).isEqualTo(TransactionType.INCOME);
         assertThat(response.description()).isNull();
+        assertThat(response.date()).isEqualTo(TODAY);
     }
 
     @Test

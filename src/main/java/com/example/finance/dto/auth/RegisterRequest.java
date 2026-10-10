@@ -1,5 +1,6 @@
 package com.example.finance.dto.auth;
 
+import com.example.finance.dto.validation.MaxUtf8Bytes;
 import com.example.finance.util.InputNormalizer;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
@@ -10,7 +11,7 @@ import jakarta.validation.constraints.Size;
  * construction, before validation runs.
  *
  * @param username    email address used as login name
- * @param password    8-72 characters with at least one letter and one digit
+ * @param password    8-72 characters (at most 72 UTF-8 bytes) with at least one letter and one digit
  * @param fullName    the user's full name
  * @param phoneNumber 7-15 digits with an optional leading '+'
  */
@@ -22,6 +23,7 @@ public record RegisterRequest(
 
         @NotBlank(message = "Password is required")
         @Size(min = 8, max = 72, message = "Password must be between 8 and 72 characters")
+        @MaxUtf8Bytes(value = 72, message = "Password must be at most 72 bytes when UTF-8 encoded")
         @Pattern(regexp = ValidationPatterns.PASSWORD,
                 message = "Password must contain at least one letter and one digit and no whitespace")
         String password,

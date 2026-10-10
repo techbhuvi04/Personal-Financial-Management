@@ -24,7 +24,7 @@ A session-authenticated REST API for tracking income and expenses, organising th
 | Concern | Choice |
 | --- | --- |
 | Language / runtime | Java 17 |
-| Framework | Spring Boot 3.3.5 (Web, Security, Data JPA, Validation, Actuator) |
+| Framework | Spring Boot 3.5.16 (Web, Security 6.5, Data JPA / Hibernate 6.6, Validation, Actuator) |
 | Database | PostgreSQL (production); H2 in PostgreSQL mode (tests and the zero-setup `h2` profile) |
 | Migrations | Flyway; Hibernate runs in `validate` mode only |
 | Security | Spring Security, server-side `HttpSession`, BCrypt password hashing |
@@ -50,10 +50,11 @@ src/main/java/com/example/finance
 ├── repository/      Spring Data repositories, TransactionSpecifications (dynamic filters),
 │                    projection/ (aggregation result records)
 ├── entity/          User, Category, Transaction, SavingsGoal, enums/TransactionType
-├── dto/             auth, transaction, category, goal, report, common (Java records)
+├── dto/             auth, transaction, category, goal, report, common (Java records),
+│                    validation/ (@MaxUtf8Bytes)
 ├── mapper/          Entity → response DTO mappers
 ├── exception/       GlobalExceptionHandler (@RestControllerAdvice), ErrorResponse, domain exceptions
-└── util/            MonetaryAmounts (scale/rounding policy), InputNormalizer
+└── util/            MonetaryAmounts (scale/rounding policy), SupportedDateRange, InputNormalizer
 src/main/resources
 ├── application.yml, application-local.yml, application-h2.yml
 └── db/migration/V1..V4 (users, categories + default seed, transactions, savings_goals)
@@ -114,11 +115,16 @@ Migrations run automatically at startup, so there is no separate migration comma
 
 ### End-to-end smoke test
 
-`scripts/api_smoke_test.sh` is this project's own curl-based regression script. It runs 67 checks covering every endpoint, the main error cases, cross-user isolation and logout. It is **not** the assignment's `financial_manager_tests.sh`.
+`scripts/api_smoke_test.sh` is this project's own curl-based regression script. It runs 68 checks covering every endpoint, the main error cases, cross-user isolation and logout.
+
+The assignment's grading script, `financial_manager_tests.sh` (linked from the assignment PDF), takes the API base URL:
 
 ```bash
 bash scripts/api_smoke_test.sh http://localhost:8080/api
+bash financial_manager_tests.sh http://localhost:8080/api
 ```
+
+The grading script passes 86/86 against this build on local PostgreSQL (fresh database and again after a restart) and on the `h2` profile.
 
 ## Configuration
 
@@ -144,12 +150,12 @@ All deployment-specific values come from environment variables. No secrets are c
 ## Testing and coverage
 
 ```bash
-./mvnw test      # 219 tests (unit + integration), H2 in-memory, no external services needed
+./mvnw test      # 276 tests (unit + integration), H2 in-memory, no external services needed
 ./mvnw verify    # tests + JaCoCo report + fails the build if line coverage < 80%
 open target/site/jacoco/index.html
 ```
 
-Latest measured coverage: **98.2% line**, **89.0% branch** (only `FinanceApplication.main` is excluded).
+Latest measured coverage: **98.3% line**, **90.6% branch** (only `FinanceApplication.main` is excluded).
 
 | Suite | What it proves |
 | --- | --- |
@@ -160,6 +166,11 @@ Latest measured coverage: **98.2% line**, **89.0% branch** (only `FinanceApplica
 | `SessionCookieIntegrationTest` (real Tomcat on a random port) | `HttpOnly` + `SameSite=Strict` cookie, the cookie round trip, invalidation on logout |
 | `CsrfEnabledIntegrationTest` | Token required when enabled; login and register exempt |
 | `ConcurrencyIntegrationTest` | Six-thread races on the same email and the same category name: exactly one wins, the rest get 409 |
+| `ConcurrentModificationIntegrationTest` (real HTTP) | Update-vs-delete, delete-vs-delete and category-delete-vs-transaction-create races: never 5xx, never an orphaned transaction |
+| `AssignmentContractIntegrationTest` | Replays the grading script's data and compares the exact serialized values it checks (`65.5`, `0`, `"custom":true`, ignored `date`) |
+| `FinancialCalculationIntegrationTest` | Hand-computed goal and report figures: income-only, expense-only, negative, exactly 100%, repeating decimals, precision limit, month/year/leap boundaries |
+| `InputBoundaryIntegrationTest` / `SecurityHardeningIntegrationTest` | 72-byte password limit, supported date range, mass assignment, rejected writes persisting nothing, forged cookies, CORS, passwords never in responses or logs, single-query transaction listing |
+| `ProductionCookieIntegrationTest` | `Secure` cookie attribute with the production setting |
 
 Integration tests pin the business clock to 2026-10-10 UTC (`TestClockConfig`) and clean all user data after each test, so they don't depend on the real date or on test order.
 
@@ -251,9 +262,9 @@ Registration validation:
 | Field | Rule |
 | --- | --- |
 | `username` | Valid email, at most 254 characters. Trimmed and lower-cased before storage. Unique, case-insensitively. |
-| `password` | 8–72 characters (72 is BCrypt's limit), at least one letter and one digit, no whitespace |
+| `password` | 8–72 characters and at most 72 UTF-8 bytes (BCrypt's input limit), at least one letter and one digit, no whitespace |
 | `fullName` | 1–100 characters: letters, spaces, `.` `'` `-`. Must start with a letter. |
-| `phoneNumber` | Optional leading `+`, then 7–15 digits not starting with 0. Spaces, dashes, dots and parentheses are stripped first. |
+| `phoneNumber` | Optional leading `+`, then 7–15 digits (a leading 0 is allowed, e.g. `+0987654321`). Spaces, dashes, dots and parentheses are stripped first. |
 
 ### Transactions
 
@@ -275,7 +286,7 @@ DELETE /api/transactions/1
 
 **Create:**
 - `amount` must be greater than 0, with at most 13 integer digits and 2 decimal places.
-- `date` must be a real calendar date that is not after today in `APP_TIME_ZONE`.
+- `date` must be a real calendar date, on or after 1900-01-01 and not after today in `APP_TIME_ZONE`.
 - `category` is a case-insensitive name of a default category or one of your own custom categories.
 - `description` is optional, up to 255 characters.
 - `type` is optional. It is always derived from the category, and if you send it, it must match or you get a 400.
@@ -283,7 +294,7 @@ DELETE /api/transactions/1
 **List:**
 - Results are sorted newest date first; transactions on the same date are ordered newest id first.
 - All filters are optional and combined with AND:
-  - `startDate` and `endDate` (both inclusive; `startDate > endDate` returns 400)
+  - `startDate` and `endDate` (both inclusive, within 1900-01-01..9999-12-31; `startDate > endDate` returns 400)
   - `categoryId`
   - `category` (a name)
   - `type` (`INCOME` or `EXPENSE`, any letter case)
@@ -292,23 +303,25 @@ DELETE /api/transactions/1
 **Update:**
 - This is a partial update: `amount`, `category` and `description` are updatable, and fields you leave out are not changed.
 - An empty `description` clears it.
-- The date can never change. A `date` that differs from the stored one returns 400; sending the same date is accepted as a no-op.
-- A body with nothing updatable returns 400.
+- The date is read-only. A `date` in the body is **ignored** and the stored date is returned unchanged, which is what the grading script expects.
+- A body with nothing to change (e.g. only `date`) is a no-op that returns 200 with the current transaction.
 - Changing the category changes the derived `type`.
 
 ### Categories
 
 ```http
 GET /api/categories
-→ 200 {"categories":[{"id":1,"name":"Salary","type":"INCOME","isCustom":false}, ..., {"id":8,"name":"SideBusinessIncome","type":"INCOME","isCustom":true}]}
+→ 200 {"categories":[{"id":1,"name":"Salary","type":"INCOME","isCustom":false,"custom":false}, ..., {"id":8,"name":"SideBusinessIncome","type":"INCOME","isCustom":true,"custom":true}]}
 
 POST /api/categories
 {"name":"SideBusinessIncome","type":"INCOME"}
-→ 201 {"id":8,"name":"SideBusinessIncome","type":"INCOME","isCustom":true}
+→ 201 {"id":8,"name":"SideBusinessIncome","type":"INCOME","isCustom":true,"custom":true}
 
 DELETE /api/categories/SideBusinessIncome
 → 200 {"message":"Category deleted successfully"}
 ```
+
+The flag appears as both `isCustom` (the assignment's API specification) and `custom` (the field the grading script reads).
 
 **Default categories** are seeded by migration `V2` and cannot be modified or deleted:
 - INCOME: Salary
@@ -329,7 +342,7 @@ DELETE /api/categories/SideBusinessIncome
 POST /api/goals
 {"goalName":"Emergency Fund","targetAmount":5000.00,"targetDate":"2027-01-01","startDate":"2026-01-01"}
 → 201 {"id":1,"goalName":"Emergency Fund","targetAmount":5000.00,"targetDate":"2027-01-01","startDate":"2026-01-01",
-       "currentProgress":1000.00,"progressPercentage":20.00,"remainingAmount":4000.00}
+       "currentProgress":1000.00,"progressPercentage":20.0,"remainingAmount":4000.00}
 
 GET /api/goals          → 200 {"goals":[ ...same shape... ]}
 GET /api/goals/1        → 200 { ...same shape... }
@@ -341,12 +354,12 @@ DELETE /api/goals/1     → 200 {"message":"Goal deleted successfully"}
 **Create:**
 - `goalName` is required, up to 100 characters.
 - `targetAmount` must be greater than 0, with 2 decimal places.
-- `targetDate` must be strictly after today.
-- `startDate` is optional and defaults to today. It cannot be in the future.
+- `targetDate` must be strictly after today and no later than 9999-12-31.
+- `startDate` is optional and defaults to today. It cannot be in the future or before 1900-01-01.
 
 **Update:**
 - Only `targetAmount` and `targetDate` can change; a new `targetDate` must be in the future.
-- The name and start date are fixed.
+- The name and start date are fixed; if sent, they are ignored. A body with nothing to change returns 200 unchanged.
 - Updating only the amount of a goal whose target date has already passed is allowed.
 
 ### Reports
@@ -361,8 +374,8 @@ GET /api/reports/yearly/2024
 ```
 
 - `month` must be 1–12 and `year` must be 1900–9999; anything else returns 400.
-- Category keys are ordered by name.
-- A period with no transactions returns `{}` maps and `"netSavings":0.00`.
+- Category keys are ordered alphabetically, ignoring case (the same on every database).
+- A period with no transactions returns `{}` maps and `"netSavings":0`.
 
 ## Error responses
 
@@ -388,7 +401,7 @@ Every error, including those raised inside the security filter chain, has this s
 | 403 | Another user's goal; deleting a default category; missing CSRF token (when enabled) |
 | 404 | Unknown transaction/goal/category/endpoint; another user's transaction (see below) |
 | 405 / 406 / 413 / 415 | Wrong method / non-JSON `Accept` / body over `MAX_REQUEST_SIZE` / non-JSON `Content-Type` |
-| 409 | Duplicate username; duplicate or default-shadowing category name; any other unique-constraint conflict |
+| 409 | Duplicate username; duplicate or default-shadowing category name; another request modified or deleted the same resource at the same moment (reload and retry); any other unique-constraint conflict |
 | 503 | Database unreachable (also during login, so an outage is not reported as bad credentials) |
 | 500 | Only for genuinely unexpected failures. These are logged server-side with a generic message. |
 
@@ -399,7 +412,8 @@ Every error, including those raised inside the security filter chain, has this s
 ```
 currentProgress    = Σ income amounts − Σ expense amounts
                      over the goal owner's transactions dated startDate ..= today
-progressPercentage = currentProgress / targetAmount × 100   (2 decimals, HALF_UP)
+progressPercentage = currentProgress / targetAmount × 100   (BigDecimal, 2 decimals, HALF_UP;
+                                                              serialized as a plain number: 65.5, 0.0, 16.67)
 remainingAmount    = targetAmount − currentProgress
 ```
 
@@ -423,7 +437,8 @@ remainingAmount    = targetAmount − currentProgress
 ### Money
 
 - Amounts are stored as `NUMERIC(15,2)` and handled as `BigDecimal` end to end; floating point is never used.
-- All outputs are scaled to 2 decimal places with HALF_UP rounding (`MonetaryAmounts`).
+- All outputs are scaled to 2 decimal places with HALF_UP rounding (`MonetaryAmounts`), except that zero is written as `0`. The grading script compares values as text and expects `"netSavings":0` and `"currentProgress":0` for empty periods, while non-zero values keep two decimals (`6550.00`).
+- Percentages are computed in `BigDecimal` and converted to a JSON number only for output.
 - Input with more than 2 decimal places is rejected rather than rounded silently.
 
 ## Database schema
@@ -455,18 +470,21 @@ These are the points where the assignment was ambiguous or silent, and the choic
 4. **Transaction type:** the type is derived from the category. An optional `type` in a request is validated rather than trusted.
 5. **Transaction updates:**
    - Updates are partial (PATCH-like semantics on `PUT`), so omitted fields are never reset.
-   - Sending a different `date` returns 400. Sending the unchanged date is accepted, so clients that echo the full object still work.
+   - The date is read-only and a `date` in the body is ignored. The grading script requires this (2xx with the original date); rejecting it with 400 failed the script.
 6. **Goal dates:**
    - A future `startDate` is rejected.
    - The target date must be strictly after today.
    - Progress counts transactions through "today" in `APP_TIME_ZONE`.
 7. **Logout without a session** returns 401, which is one of the two documented statuses.
-8. **Seeding:** default categories are seeded by a versioned Flyway migration. Flyway runs it once, so restarts cannot duplicate them.
-9. **Concurrency:**
+8. **Output formats come from the grading script:** `progressPercentage` is a plain number (`65.5`, `0.0`), zero amounts are `0`, and categories carry `custom` alongside `isCustom`.
+9. **Supported dates:** every business date must lie within 1900-01-01..9999-12-31. Anything that can be stored can then also be reported, and out-of-range values get a 400 instead of failing in SQL.
+10. **Seeding:** default categories are seeded by a versioned Flyway migration. Flyway runs it once, so restarts cannot duplicate them.
+11. **Concurrency:**
    - Uniqueness (usernames, category names) and referential integrity (category in use) are enforced by database constraints, which are the final authority.
    - Service-level pre-checks give friendly messages, and races that slip past them are caught at `saveAndFlush` and translated to the same 409 or 400.
-   - This is verified by multi-threaded tests. No pessimistic locking is needed.
-10. **Monolith:** this is a single service. There are no message brokers, caches or service interfaces without a second implementation.
+   - An update or delete that loses a race against another delete returns 409 (`ConcurrencyFailureException`) instead of 500.
+   - Writing a transaction takes a shared row lock on its **custom** category, and deleting a category takes an exclusive lock. This keeps "no transaction references a deleted category" true even on databases whose foreign-key checks don't lock the parent row (H2 does not; PostgreSQL does). Default categories are never deleted, so they are not locked.
+12. **Monolith:** this is a single service. There are no message brokers, caches or service interfaces without a second implementation.
 
 ## Deployment
 
@@ -505,4 +523,5 @@ docker run -p 8080:8080 -e DB_URL=... -e DB_USERNAME=... -e DB_PASSWORD=... pers
 - **Size limit for chunked uploads:** the request-size limit checks the declared `Content-Length`. Chunked uploads without a length are still bounded by the field-level size validation.
 - **No account self-service:** there is no password reset, account deletion or login rate limiting. Add a rate limiter (e.g. Bucket4j or the platform's WAF) before exposing the API widely.
 - **Free hosting tiers:** free tiers sleep when idle, so the first request after a pause can take a minute. Free PostgreSQL instances may also be time-limited; check the provider's current policy.
-- **Grading script not run:** the assignment's `financial_manager_tests.sh` was not available while this was built, so behaviour follows the written specification. Where the spec was ambiguous, the choices are listed under [Design decisions](#design-decisions-and-assumptions).
+- **Grading script verified locally only:** `financial_manager_tests.sh` passes 86/86 against local PostgreSQL and the `h2` profile; it still has to be run against the deployed URL. It hard-codes some dates (a "future" transaction on 2026-12-31 and goals ending 2027-01-01), so it will start failing for every implementation after those dates.
+- **Goal listing query count:** progress is one aggregate query per goal (1 + N queries for N goals), which is fine for personal-scale goal counts. The transaction listing is a single query.

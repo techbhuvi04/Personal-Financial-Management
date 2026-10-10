@@ -5,8 +5,10 @@ import com.example.finance.dto.auth.RegisterRequest;
 import com.example.finance.entity.User;
 import com.example.finance.exception.DuplicateResourceException;
 import com.example.finance.repository.UserRepository;
+import java.nio.charset.StandardCharsets;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -20,6 +22,9 @@ import org.springframework.transaction.annotation.Transactional;
 public class AuthService {
 
     static final String DUPLICATE_USERNAME_MESSAGE = "An account with this username already exists";
+
+    /** BCrypt ignores input beyond 72 bytes; longer passwords can never have been registered. */
+    static final int BCRYPT_MAX_PASSWORD_BYTES = 72;
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
@@ -60,13 +65,18 @@ public class AuthService {
     }
 
     /**
-     * Verifies credentials. Unknown usernames and wrong passwords fail identically.
+     * Verifies credentials. Unknown usernames and wrong passwords fail identically. Passwords longer than
+     * BCrypt's 72-byte input limit are rejected up front: otherwise BCrypt would compare only their first 72 bytes
+     * and accept any password sharing that prefix.
      *
      * @param request login data (username already normalized)
      * @return the successful authentication
      * @throws org.springframework.security.core.AuthenticationException if the credentials are invalid
      */
     public Authentication authenticate(LoginRequest request) {
+        if (request.password().getBytes(StandardCharsets.UTF_8).length > BCRYPT_MAX_PASSWORD_BYTES) {
+            throw new BadCredentialsException("Password exceeds the BCrypt input limit");
+        }
         return authenticationManager.authenticate(
                 UsernamePasswordAuthenticationToken.unauthenticated(request.username(), request.password()));
     }

@@ -7,7 +7,7 @@ import java.time.LocalDate;
 
 /**
  * Partial update of a savings goal. Only the target amount and target date may change; absent fields are left
- * unchanged.
+ * unchanged and any other field in the request body (goal name, start date) is ignored.
  *
  * @param targetAmount new positive target
  * @param targetDate   new target date, must be after today
@@ -19,11 +19,4 @@ public record UpdateGoalRequest(
         BigDecimal targetAmount,
 
         LocalDate targetDate) {
-
-    /**
-     * @return whether the request changes anything
-     */
-    public boolean hasUpdatableField() {
-        return targetAmount != null || targetDate != null;
-    }
 }

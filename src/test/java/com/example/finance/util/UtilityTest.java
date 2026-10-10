@@ -19,7 +19,9 @@ class UtilityTest {
 
     @Test
     void nullAmountNormalizesToZero() {
-        assertThat(MonetaryAmounts.normalize(null)).isEqualTo(MonetaryAmounts.ZERO).hasToString("0.00");
+        assertThat(MonetaryAmounts.normalize(null)).isEqualTo(MonetaryAmounts.ZERO).hasToString("0");
+        assertThat(MonetaryAmounts.normalize(new BigDecimal("0.004"))).hasToString("0");
+        assertThat(MonetaryAmounts.normalize(new BigDecimal("-0.00"))).hasToString("0");
     }
 
     @Test

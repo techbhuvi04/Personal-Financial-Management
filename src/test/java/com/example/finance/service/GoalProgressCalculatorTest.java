@@ -57,7 +57,8 @@ class GoalProgressCalculatorTest {
 
         GoalProgress progress = calculator.calculate(goal(1, user(1), "100", TODAY.plusDays(1), TODAY));
 
-        assertThat(progress.currentProgress()).hasToString("0.00");
+        assertThat(progress.currentProgress()).hasToString("0");
+        assertThat(progress.progressPercentage()).hasToString("0.00");
         assertThat(progress.remainingAmount()).hasToString("100.00");
     }
 
@@ -65,7 +66,7 @@ class GoalProgressCalculatorTest {
     void startDateAfterTodayCountsNothing() {
         GoalProgress progress = calculator.calculate(goal(1, user(1), "100", TODAY.plusYears(1), TODAY.plusDays(1)));
 
-        assertThat(progress.currentProgress()).hasToString("0.00");
+        assertThat(progress.currentProgress()).hasToString("0");
         verifyNoInteractions(transactionRepository);
     }
 }

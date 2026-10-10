@@ -13,7 +13,7 @@ class GoalProgressTest {
             "0, 5000, 0.00, 5000.00",
             "1000, 5000, 20.00, 4000.00",
             "1000, 6000, 16.67, 5000.00",
-            "5000, 5000, 100.00, 0.00",
+            "5000, 5000, 100.00, 0",
             "7500, 5000, 150.00, -2500.00",
             "-250, 1000, -25.00, 1250.00",
             "1, 3, 33.33, 2.00",
@@ -25,6 +25,7 @@ class GoalProgressTest {
 
         assertThat(result.progressPercentage()).hasToString(percentage);
         assertThat(result.remainingAmount()).hasToString(remaining);
-        assertThat(result.currentProgress().scale()).isEqualTo(2);
+        assertThat(result.currentProgress().signum() == 0 ? 0 : result.currentProgress().scale())
+                .as("non-zero amounts carry two decimals").isIn(0, 2);
     }
 }

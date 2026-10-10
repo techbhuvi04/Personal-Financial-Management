@@ -84,8 +84,10 @@ public abstract class IntegrationTestBase {
         return (MockHttpSession) result.getRequest().getSession(false);
     }
 
+    /** POSTs JSON, optionally within a session (null sends the request anonymously). */
     protected ResultActions postJson(MockHttpSession session, String path, Object body) throws Exception {
-        return mockMvc.perform(post(path).session(session).contentType(MediaType.APPLICATION_JSON).content(json(body)));
+        var request = post(path).contentType(MediaType.APPLICATION_JSON).content(json(body));
+        return mockMvc.perform(session == null ? request : request.session(session));
     }
 
     protected ResultActions putJson(MockHttpSession session, String path, Object body) throws Exception {

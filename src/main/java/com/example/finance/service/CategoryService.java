@@ -14,6 +14,7 @@ import com.example.finance.repository.UserRepository;
 import java.util.List;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -93,7 +94,7 @@ public class CategoryService {
             throw new BusinessRuleViolationException("Category name is required");
         }
         String normalizedName = Category.normalize(name);
-        Category category = categoryRepository.findByOwnerIdAndNormalizedName(userId, normalizedName)
+        Category category = categoryRepository.findOwnedForDeletion(userId, normalizedName)
                 .orElseThrow(() -> categoryRepository.existsByDefaultCategoryTrueAndNormalizedName(normalizedName)
                         ? new ResourceForbiddenException("Default categories cannot be deleted")
                         : new ResourceNotFoundException("Category '" + name.trim() + "' not found"));
@@ -110,17 +111,32 @@ public class CategoryService {
     }
 
     /**
-     * Resolves a category name to a default category or one of the user's custom categories.
+     * Resolves a category name to a default category or one of the user's custom categories, for use as the
+     * category of a transaction being written in the caller's transaction.
+     *
+     * <p>Custom categories are re-read with a shared row lock that lasts until the caller commits, so a concurrent
+     * {@link #deleteCategory} (which takes an exclusive lock) is serialised with the write. This keeps the
+     * "no transaction references a deleted category" invariant on every database, including ones whose foreign
+     * key checks do not lock the parent row (H2). Default categories are never deleted and are not locked.
      *
      * @param userId current user
      * @param name   category name (case-insensitive)
      * @return the category
      * @throws BusinessRuleViolationException if no such category is accessible to the user
      */
-    @Transactional(readOnly = true)
+    @Transactional(propagation = Propagation.MANDATORY)
     public Category resolveAccessibleCategory(Long userId, String name) {
-        return categoryRepository.findAccessibleByNormalizedName(userId, Category.normalize(name))
-                .orElseThrow(() -> new BusinessRuleViolationException("Category '" + name + "' does not exist"));
+        Category category = categoryRepository.findAccessibleByNormalizedName(userId, Category.normalize(name))
+                .orElseThrow(() -> categoryDoesNotExist(name));
+        if (category.isDefaultCategory()) {
+            return category;
+        }
+        return categoryRepository.findByIdForReference(category.getId())
+                .orElseThrow(() -> categoryDoesNotExist(name));
+    }
+
+    private static BusinessRuleViolationException categoryDoesNotExist(String name) {
+        return new BusinessRuleViolationException("Category '" + name + "' does not exist");
     }
 
     private static DuplicateResourceException duplicateCustom(String name) {

@@ -210,25 +210,73 @@ class TransactionIntegrationTest extends IntegrationTestBase {
     }
 
     @Test
-    void updateRejectsDateChangeButAcceptsUnchangedDate() throws Exception {
+    void updateIgnoresSuppliedDateAndAppliesOtherFields() throws Exception {
         long id = createTransaction(session, "100", "2024-01-15", "Food");
 
         putJson(session, "/api/transactions/" + id, Map.of("amount", 5, "date", "2024-01-16"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("Transaction date cannot be changed"));
-        putJson(session, "/api/transactions/" + id, Map.of("amount", 5, "date", "2024-01-15"))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.date").value("2024-01-15"))
+                .andExpect(jsonPath("$.amount").value(5.0));
+        putJson(session, "/api/transactions/" + id, Map.of("date", "not-a-date-at-all"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.date").value("2024-01-15"));
 
         assertThat(jdbcTemplate.queryForObject("SELECT transaction_date FROM transactions WHERE id = ?",
                 java.sql.Date.class, id).toLocalDate()).isEqualTo("2024-01-15");
     }
 
     @Test
+    void updateWithNothingToChangeIsANoOp() throws Exception {
+        long id = createTransaction(session, "100", "2024-01-15", "Food");
+
+        putJson(session, "/api/transactions/" + id, Map.of())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.amount").value(100.0))
+                .andExpect(jsonPath("$.category").value("Food"));
+    }
+
+    @Test
+    void updateCanChangeSeveralFieldsAtOnce() throws Exception {
+        createCategory(session, "Bonus", "INCOME");
+        long id = createTransaction(session, "100", "2024-01-15", "Food");
+
+        putJson(session, "/api/transactions/" + id, Map.of("amount", 250.5, "category", "bonus",
+                "description", "Year-end bonus"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.category").value("Bonus"))
+                .andExpect(jsonPath("$.type").value("INCOME"))
+                .andExpect(jsonPath("$.description").value("Year-end bonus"))
+                .andExpect(content().string(containsString("\"amount\":250.50")));
+    }
+
+    @Test
+    void updateCannotUseAnotherUsersCustomCategory() throws Exception {
+        MockHttpSession other = newUserSession();
+        createCategory(other, "Private", "EXPENSE");
+        long id = createTransaction(session, "100", "2024-01-15", "Food");
+
+        putJson(session, "/api/transactions/" + id, Map.of("category", "Private"))
+                .andExpect(status().isBadRequest());
+        getAs(session, "/api/transactions").andExpect(jsonPath("$.transactions[0].category").value("Food"));
+    }
+
+    @Test
+    void sameStartAndEndDateSelectsExactlyThatDay() throws Exception {
+        createTransaction(session, "1", "2024-01-14", "Food");
+        createTransaction(session, "2", "2024-01-15", "Food");
+        createTransaction(session, "3", "2024-01-16", "Food");
+
+        getAs(session, "/api/transactions?startDate=2024-01-15&endDate=2024-01-15")
+                .andExpect(jsonPath("$.transactions[*].amount").value(contains(2.0)));
+    }
+
+    @Test
     void updateValidationFailuresDoNotPersistAnything() throws Exception {
         long id = createTransaction(session, "100", "2024-01-15", "Food");
 
-        putJson(session, "/api/transactions/" + id, Map.of()).andExpect(status().isBadRequest());
         putJson(session, "/api/transactions/" + id, Map.of("amount", 0)).andExpect(status().isBadRequest());
+        putJson(session, "/api/transactions/" + id, Map.of("amount", 1, "description", "x".repeat(256)))
+                .andExpect(status().isBadRequest());
         putJson(session, "/api/transactions/" + id, Map.of("amount", 1, "category", "Unknown"))
                 .andExpect(status().isBadRequest());
         putJson(session, "/api/transactions/" + id, Map.of("amount", 1, "category", "Salary", "type", "EXPENSE"))

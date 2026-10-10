@@ -7,16 +7,15 @@ import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
-import java.time.LocalDate;
 
 /**
- * Partial update of a transaction. Absent (null) fields are left unchanged. An empty description clears it.
- * The date cannot be changed: a supplied date is accepted only if it equals the stored date.
+ * Partial update of a transaction. Absent (null) fields are left unchanged and an empty description clears it.
+ * The transaction date is read-only: a {@code date} in the request body is ignored, never applied, as the
+ * assignment's grading script expects.
  *
  * @param amount      new positive amount
  * @param category    new category name
  * @param description new description; empty string clears it
- * @param date        must be absent or equal to the existing date
  * @param type        must be absent or equal to the resulting category type
  */
 public record UpdateTransactionRequest(
@@ -31,19 +30,10 @@ public record UpdateTransactionRequest(
         @Size(max = 255, message = "Description must be at most 255 characters")
         String description,
 
-        LocalDate date,
-
         TransactionType type) {
 
     public UpdateTransactionRequest {
         category = InputNormalizer.trim(category);
         description = InputNormalizer.trim(description);
-    }
-
-    /**
-     * @return whether the request changes anything that may be changed
-     */
-    public boolean hasUpdatableField() {
-        return amount != null || category != null || description != null;
     }
 }

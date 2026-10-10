@@ -69,7 +69,7 @@ class GoalServiceTest {
 
         assertThat(response.startDate()).isEqualTo(TODAY);
         assertThat(response.targetAmount()).hasToString("1000.00");
-        assertThat(response.progressPercentage()).hasToString("10.00");
+        assertThat(response.progressPercentage()).isEqualTo(10.0);
     }
 
     @Test
@@ -94,7 +94,7 @@ class GoalServiceTest {
         when(progressCalculator.calculate(second)).thenReturn(GoalProgress.of(BigDecimal.TEN, second.getTargetAmount()));
 
         assertThat(service.list(USER_ID)).extracting(GoalResponse::currentProgress)
-                .map(BigDecimal::toPlainString).containsExactly("0.00", "10.00");
+                .map(BigDecimal::toPlainString).containsExactly("0", "10.00");
     }
 
     @Test
@@ -133,9 +133,35 @@ class GoalServiceTest {
     }
 
     @Test
-    void updateValidatesBeforeLoading() {
-        assertThatThrownBy(() -> service.update(USER_ID, 7L, new UpdateGoalRequest(null, null)))
+    void updateWithNothingToChangeReturnsCurrentState() {
+        SavingsGoal existing = goal(7, owner, "1000", TODAY.plusDays(5), TODAY);
+        when(goalRepository.findById(7L)).thenReturn(Optional.of(existing));
+        when(goalRepository.saveAndFlush(existing)).thenReturn(existing);
+        when(progressCalculator.calculate(existing)).thenReturn(PROGRESS);
+
+        GoalResponse response = service.update(USER_ID, 7L, new UpdateGoalRequest(null, null));
+
+        assertThat(response.targetAmount()).hasToString("1000.00");
+        assertThat(response.targetDate()).isEqualTo(TODAY.plusDays(5));
+    }
+
+    @Test
+    void createAndUpdateRejectDatesOutsideSupportedRange() {
+        assertThatThrownBy(() -> service.create(USER_ID, new CreateGoalRequest("Fund", BigDecimal.TEN,
+                LocalDate.of(10000, 1, 1), null)))
+                .isInstanceOf(BusinessRuleViolationException.class)
+                .hasMessage("Target date must be on or before 9999-12-31");
+        assertThatThrownBy(() -> service.create(USER_ID, new CreateGoalRequest("Fund", BigDecimal.TEN,
+                TODAY.plusYears(1), LocalDate.of(1899, 12, 31))))
+                .isInstanceOf(BusinessRuleViolationException.class)
+                .hasMessage("Start date must be on or after 1900-01-01");
+        assertThatThrownBy(() -> service.update(USER_ID, 7L, new UpdateGoalRequest(null, LocalDate.MAX)))
                 .isInstanceOf(BusinessRuleViolationException.class);
+        verifyNoInteractions(goalRepository);
+    }
+
+    @Test
+    void updateValidatesTargetDateBeforeLoading() {
         assertThatThrownBy(() -> service.update(USER_ID, 7L, new UpdateGoalRequest(null, TODAY.minusDays(1))))
                 .isInstanceOf(BusinessRuleViolationException.class);
         verifyNoInteractions(goalRepository);

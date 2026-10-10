@@ -110,7 +110,7 @@ class CategoryServiceTest {
     @Test
     void deleteRemovesUnreferencedCustomCategory() {
         Category gifts = customCategory(9, "Gifts", TransactionType.EXPENSE, owner);
-        when(categoryRepository.findByOwnerIdAndNormalizedName(USER_ID, "gifts")).thenReturn(Optional.of(gifts));
+        when(categoryRepository.findOwnedForDeletion(USER_ID, "gifts")).thenReturn(Optional.of(gifts));
 
         service.deleteCategory(USER_ID, " GIFTS ");
 
@@ -120,7 +120,7 @@ class CategoryServiceTest {
 
     @Test
     void deleteDefaultCategoryIsForbidden() {
-        when(categoryRepository.findByOwnerIdAndNormalizedName(USER_ID, "salary")).thenReturn(Optional.empty());
+        when(categoryRepository.findOwnedForDeletion(USER_ID, "salary")).thenReturn(Optional.empty());
         when(categoryRepository.existsByDefaultCategoryTrueAndNormalizedName("salary")).thenReturn(true);
 
         assertThatThrownBy(() -> service.deleteCategory(USER_ID, "Salary"))
@@ -129,7 +129,7 @@ class CategoryServiceTest {
 
     @Test
     void deleteUnknownCategoryIsNotFound() {
-        when(categoryRepository.findByOwnerIdAndNormalizedName(USER_ID, "nope")).thenReturn(Optional.empty());
+        when(categoryRepository.findOwnedForDeletion(USER_ID, "nope")).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.deleteCategory(USER_ID, "Nope"))
                 .isInstanceOf(ResourceNotFoundException.class)
@@ -139,7 +139,7 @@ class CategoryServiceTest {
     @Test
     void deleteReferencedCategoryIsRejected() {
         Category gifts = customCategory(9, "Gifts", TransactionType.EXPENSE, owner);
-        when(categoryRepository.findByOwnerIdAndNormalizedName(USER_ID, "gifts")).thenReturn(Optional.of(gifts));
+        when(categoryRepository.findOwnedForDeletion(USER_ID, "gifts")).thenReturn(Optional.of(gifts));
         when(transactionRepository.existsByCategoryId(9L)).thenReturn(true);
 
         assertThatThrownBy(() -> service.deleteCategory(USER_ID, "Gifts"))
@@ -150,7 +150,7 @@ class CategoryServiceTest {
     @Test
     void deleteRaceWithNewTransactionIsRejectedByForeignKey() {
         Category gifts = customCategory(9, "Gifts", TransactionType.EXPENSE, owner);
-        when(categoryRepository.findByOwnerIdAndNormalizedName(USER_ID, "gifts")).thenReturn(Optional.of(gifts));
+        when(categoryRepository.findOwnedForDeletion(USER_ID, "gifts")).thenReturn(Optional.of(gifts));
         doThrow(new DataIntegrityViolationException("fk")).when(categoryRepository).flush();
 
         assertThatThrownBy(() -> service.deleteCategory(USER_ID, "Gifts"))
@@ -162,6 +162,36 @@ class CategoryServiceTest {
     void deleteBlankNameIsRejected() {
         assertThatThrownBy(() -> service.deleteCategory(USER_ID, "  "))
                 .isInstanceOf(BusinessRuleViolationException.class);
+    }
+
+    @Test
+    void resolvingADefaultCategoryTakesNoLock() {
+        Category salary = defaultCategory(1, "Salary", TransactionType.INCOME);
+        when(categoryRepository.findAccessibleByNormalizedName(USER_ID, "salary")).thenReturn(Optional.of(salary));
+
+        assertThat(service.resolveAccessibleCategory(USER_ID, "SALARY")).isSameAs(salary);
+        verify(categoryRepository, never()).findByIdForReference(any());
+    }
+
+    @Test
+    void resolvingACustomCategoryLocksItAgainstConcurrentDeletion() {
+        Category gifts = customCategory(9, "Gifts", TransactionType.EXPENSE, owner);
+        when(categoryRepository.findAccessibleByNormalizedName(USER_ID, "gifts")).thenReturn(Optional.of(gifts));
+        when(categoryRepository.findByIdForReference(9L)).thenReturn(Optional.of(gifts));
+
+        assertThat(service.resolveAccessibleCategory(USER_ID, "Gifts")).isSameAs(gifts);
+        verify(categoryRepository).findByIdForReference(9L);
+    }
+
+    @Test
+    void customCategoryDeletedBeforeTheLockIsTakenIsReportedAsMissing() {
+        Category gifts = customCategory(9, "Gifts", TransactionType.EXPENSE, owner);
+        when(categoryRepository.findAccessibleByNormalizedName(USER_ID, "gifts")).thenReturn(Optional.of(gifts));
+        when(categoryRepository.findByIdForReference(9L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.resolveAccessibleCategory(USER_ID, "Gifts"))
+                .isInstanceOf(BusinessRuleViolationException.class)
+                .hasMessage("Category 'Gifts' does not exist");
     }
 
     @Test

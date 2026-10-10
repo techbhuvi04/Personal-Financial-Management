@@ -11,6 +11,7 @@ import com.example.finance.mapper.SavingsGoalMapper;
 import com.example.finance.repository.SavingsGoalRepository;
 import com.example.finance.repository.UserRepository;
 import com.example.finance.util.MonetaryAmounts;
+import com.example.finance.util.SupportedDateRange;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.List;
@@ -59,6 +60,9 @@ public class GoalService {
         if (startDate.isAfter(today)) {
             throw new BusinessRuleViolationException("Start date cannot be in the future");
         }
+        if (startDate.isBefore(SupportedDateRange.MIN)) {
+            throw new BusinessRuleViolationException("Start date must be on or after " + SupportedDateRange.MIN);
+        }
         ensureFutureTargetDate(request.targetDate(), today);
         SavingsGoal goal = goalRepository.save(new SavingsGoal(userRepository.getReferenceById(userId),
                 request.goalName(), MonetaryAmounts.normalize(request.targetAmount()), request.targetDate(),
@@ -88,7 +92,8 @@ public class GoalService {
     }
 
     /**
-     * Updates the target amount and/or target date; progress is recomputed immediately.
+     * Updates the target amount and/or target date; progress is recomputed immediately. Absent fields are left
+     * unchanged, so a request with nothing to change returns the current state.
      *
      * @param userId  current user
      * @param id      goal id
@@ -97,9 +102,6 @@ public class GoalService {
      */
     @Transactional
     public GoalResponse update(Long userId, Long id, UpdateGoalRequest request) {
-        if (!request.hasUpdatableField()) {
-            throw new BusinessRuleViolationException("Provide at least one field to update: targetAmount or targetDate");
-        }
         if (request.targetDate() != null) {
             ensureFutureTargetDate(request.targetDate(), LocalDate.now(clock));
         }
@@ -140,6 +142,9 @@ public class GoalService {
     private static void ensureFutureTargetDate(LocalDate targetDate, LocalDate today) {
         if (!targetDate.isAfter(today)) {
             throw new BusinessRuleViolationException("Target date must be in the future");
+        }
+        if (targetDate.isAfter(SupportedDateRange.MAX)) {
+            throw new BusinessRuleViolationException("Target date must be on or before " + SupportedDateRange.MAX);
         }
     }
 }

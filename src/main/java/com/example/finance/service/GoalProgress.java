@@ -25,6 +25,6 @@ public record GoalProgress(BigDecimal currentProgress, BigDecimal progressPercen
         BigDecimal target = MonetaryAmounts.normalize(targetAmount);
         BigDecimal percentage = progress.multiply(HUNDRED)
                 .divide(target, MonetaryAmounts.SCALE, MonetaryAmounts.ROUNDING);
-        return new GoalProgress(progress, percentage, target.subtract(progress));
+        return new GoalProgress(progress, percentage, MonetaryAmounts.normalize(target.subtract(progress)));
     }
 }

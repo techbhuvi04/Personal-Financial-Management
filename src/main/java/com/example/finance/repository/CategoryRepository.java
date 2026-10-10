@@ -1,9 +1,11 @@
 package com.example.finance.repository;
 
 import com.example.finance.entity.Category;
+import jakarta.persistence.LockModeType;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -37,11 +39,28 @@ public interface CategoryRepository extends JpaRepository<Category, Long> {
                                                       @Param("normalizedName") String normalizedName);
 
     /**
+     * Loads one of the user's custom categories with an exclusive row lock, held until the caller's transaction
+     * ends, so no transaction can start referencing it while it is being checked and deleted.
+     *
      * @param userId         owner
      * @param normalizedName trimmed, lower-cased category name
-     * @return the user's custom category with that name, if any
+     * @return the locked category, if the user has one with that name
      */
-    Optional<Category> findByOwnerIdAndNormalizedName(Long userId, String normalizedName);
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select c from Category c where c.owner.id = :userId and c.normalizedName = :normalizedName")
+    Optional<Category> findOwnedForDeletion(@Param("userId") Long userId,
+                                            @Param("normalizedName") String normalizedName);
+
+    /**
+     * Re-reads a category with a shared row lock held until the caller's transaction ends, so the category cannot
+     * be deleted while a transaction referencing it is being written.
+     *
+     * @param id category id
+     * @return the locked category, or empty if it was deleted in the meantime
+     */
+    @Lock(LockModeType.PESSIMISTIC_READ)
+    @Query("select c from Category c where c.id = :id")
+    Optional<Category> findByIdForReference(@Param("id") Long id);
 
     /**
      * @param normalizedName trimmed, lower-cased category name

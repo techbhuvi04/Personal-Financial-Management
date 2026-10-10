@@ -15,6 +15,7 @@ import com.example.finance.repository.TransactionSpecifications;
 import com.example.finance.repository.UserRepository;
 import com.example.finance.util.InputNormalizer;
 import com.example.finance.util.MonetaryAmounts;
+import com.example.finance.util.SupportedDateRange;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.List;
@@ -65,6 +66,10 @@ public class TransactionService {
         if (request.date().isAfter(LocalDate.now(clock))) {
             throw new BusinessRuleViolationException("Transaction date cannot be in the future");
         }
+        if (request.date().isBefore(SupportedDateRange.MIN)) {
+            throw new BusinessRuleViolationException(
+                    "Transaction date must be on or after " + SupportedDateRange.MIN);
+        }
         Category category = categoryService.resolveAccessibleCategory(userId, request.category());
         ensureTypeMatches(request.type(), category);
         Transaction transaction = new Transaction(userRepository.getReferenceById(userId), category,
@@ -76,10 +81,13 @@ public class TransactionService {
      * @param userId current user
      * @param filter optional filters; both date bounds inclusive
      * @return matching transactions, newest first (ties broken by id, newest first)
-     * @throws BusinessRuleViolationException if startDate is after endDate or categoryId is not positive
+     * @throws BusinessRuleViolationException if a date is outside the supported range, startDate is after endDate
+     *                                        or categoryId is not positive
      */
     @Transactional(readOnly = true)
     public List<TransactionResponse> list(Long userId, TransactionFilter filter) {
+        ensureSupported("startDate", filter.startDate());
+        ensureSupported("endDate", filter.endDate());
         if (filter.startDate() != null && filter.endDate() != null && filter.startDate().isAfter(filter.endDate())) {
             throw new BusinessRuleViolationException("startDate must be on or before endDate");
         }
@@ -93,26 +101,19 @@ public class TransactionService {
     }
 
     /**
-     * Applies a partial update. The date can never change.
+     * Applies a partial update. The date is not part of the request and therefore never changes; a request with
+     * nothing to change is a no-op that returns the current state.
      *
      * @param userId  current user
      * @param id      transaction id
      * @param request fields to change
      * @return the updated transaction
      * @throws ResourceNotFoundException      if the user has no such transaction
-     * @throws BusinessRuleViolationException for an empty update, a date change, an unknown category or a
-     *                                        conflicting type
+     * @throws BusinessRuleViolationException for an unknown category or a conflicting type
      */
     @Transactional
     public TransactionResponse update(Long userId, Long id, UpdateTransactionRequest request) {
-        if (!request.hasUpdatableField()) {
-            throw new BusinessRuleViolationException(
-                    "Provide at least one field to update: amount, category or description");
-        }
         Transaction transaction = findOwned(userId, id);
-        if (request.date() != null && !request.date().equals(transaction.getDate())) {
-            throw new BusinessRuleViolationException("Transaction date cannot be changed");
-        }
         Category category = request.category() == null
                 ? transaction.getCategory()
                 : categoryService.resolveAccessibleCategory(userId, request.category());
@@ -149,6 +150,12 @@ public class TransactionService {
         } catch (DataIntegrityViolationException ex) {
             // The category was deleted concurrently; the foreign key rejected the write.
             throw new BusinessRuleViolationException("Category '" + category.getName() + "' does not exist");
+        }
+    }
+
+    private static void ensureSupported(String parameter, LocalDate date) {
+        if (date != null && !SupportedDateRange.contains(date)) {
+            throw new BusinessRuleViolationException(parameter + " must be " + SupportedDateRange.describe());
         }
     }
 
